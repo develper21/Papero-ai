@@ -1,0 +1,1119 @@
+{
+	"info": {
+		"_postman_id": "b7e1c2a4-9f3d-4c8e-a6d2-5f1b0e8d7c94",
+		"name": "DistillAI (Papero) API",
+		"description": "# DistillAI (Papero) — Full API Collection\n\nAI-powered summarization platform for pharmaceutical researchers. Built with **Next.js 14 App Router**, **Prisma (PostgreSQL/Neon)**, **Redis caching**, **Google Gemini** and **NextAuth (credentials + JWT session cookies)**.\n\n---\n\n## 🚀 Getting Started\n\n1. Start the dev server: `npm run dev` → runs on **http://localhost:3001**\n2. Import this collection into Postman.\n3. Run the **Auth → Get CSRF Token** request (auto-saves `csrfToken`).\n4. Run **Auth → Sign In (Credentials)** with the seeded accounts below — Postman automatically stores the `next-auth.session-token` cookie, which authenticates every other request.\n5. Response IDs (`summaryId`, `apiKeyId`, `userId`) are auto-captured into collection variables by the request test scripts, so dependent requests fill themselves in.\n\n## 🔑 Seeded Accounts (from `prisma/seed.ts`)\n\n| Role | Email | Password |\n|---|---|---|\n| ADMIN | `admin@distill.com` | `admin123` |\n| RESEARCHER | `drrajeshkumar@example.com` (and 14 more `@example.com` accounts) | `password123` |\n\nTo switch accounts, edit `{{email}}` / `{{password}}` on the **Sign In** request and re-run it.\n\n## 🔐 Authentication Model\n\n- All protected routes read the **NextAuth JWT session cookie** (`next-auth.session-token` over HTTP / `__Secure-…` over HTTPS). There are no API-key-protected endpoints — keys are stored/managed only.\n- **Roles (RBAC):** `ADMIN` > `RESEARCHER` > `VIEWER`.\n  - Owners can read/modify **their own** resources; ADMIN can access anyone's.\n  - `/api/admin/*` requires `role === ADMIN` (returns `403` otherwise).\n  - `PATCH /api/user/{id}/password` allows **self only** (admins too are rejected for other users).\n- `POST /api/register` is public. `POST /api/summarize` and `POST /api/parse-pdf` work without a session but attribute the summary to the first RESEARCHER as a fallback.\n\n## 🧭 Route Map (28 requests)\n\n| Folder | Route | Methods | Auth |\n|---|---|---|---|\n| Auth | `/api/register` | POST | Public |\n| Auth | `/api/auth/*` (NextAuth) | GET/POST | Public |\n| Summarization | `/api/summarize` | POST | Optional session |\n| Summarization | `/api/parse-pdf` | POST | Optional session (cookie forwarded) |\n| Summaries | `/api/summaries` | GET | Session |\n| Summaries | `/api/summary/{id}` | GET, DELETE | Session (owner/ADMIN) |\n| Feedback | `/api/feedback` | GET, POST | Session |\n| API Keys | `/api/keys` | GET, POST | Session |\n| API Keys | `/api/keys/{id}` | DELETE | Session (owner/ADMIN) |\n| User | `/api/user/{id}` | PATCH, DELETE | Session (self/ADMIN) |\n| User | `/api/user/{id}/password` | PATCH | Session (self only) |\n| Dashboard | `/api/dashboard/stats` | GET | Session |\n| Admin | `/api/admin/users` | GET | ADMIN |\n| Admin | `/api/admin/users/{id}` | PATCH | ADMIN |\n| Admin | `/api/admin/keys` | GET, POST | ADMIN |\n| Admin | `/api/admin/summaries` | GET | ADMIN |\n| Admin | `/api/admin/stats` | GET | ADMIN |\n| Admin | `/api/admin/analytics` | GET | ADMIN |\n| Admin | `/api/admin/feedback/analytics` | GET | ADMIN |\n\n## 📚 External Dependencies\n\n- **PubMed (NCBI E-UTILS)** — `/api/summarize?pmid` fetches metadata from `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi`.\n- **Gemini `gemini-2.5-flash`** — generates the structured summary; auto-retries on 429 rate limits (up to 3 retries, capped 65s wait).\n- **Redis** — caches papers (7 days, `paper:pmid:{id}`) and summaries (24h, `summary:pmid:{id}`).",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "distillai"
+	},
+	"item": [
+		{
+			"name": "Auth",
+			"description": "Registration and NextAuth (credentials provider, JWT session) endpoints.\n\n⚠️ **Login flow for Postman:** run **Get CSRF Token** first (stores `{{csrfToken}}`), then **Sign In (Credentials)**. Postman saves the returned session cookie automatically and reuses it for all protected requests in this collection.",
+			"item": [
+				{
+					"name": "Register User",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Jane Doe\",\n  \"email\": \"jane.doe@example.com\",\n  \"password\": \"securePass123\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/register",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"register"
+							]
+						},
+						"description": "**POST /api/register** — Public user registration.\n\n**Body:**\n- `name` (string, required)\n- `email` (string, required, unique)\n- `password` (string, required) — hashed with bcrypt (10 rounds) before storage.\n\n**Behavior:** Rejects duplicate emails. New users get role `RESEARCHER` by default.\n\n**Responses:**\n- `201` → `{ message, user: { id, email, name } }`\n- `400` → `{ message: \"Missing required fields\" }` or `{ message: \"User already exists\" }`\n- `500` → `{ message: \"Internal server error\" }`"
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test(\"Status is 201 Created\", () => pm.expect(pm.response.code).to.eql(201));",
+									"const json = pm.response.json();",
+									"if (json.user && json.user.id) {",
+									"  pm.collectionVariables.set(\"userId\", json.user.id);",
+									"  console.log(\"Saved userId:\", json.user.id);",
+									"}"
+								]
+							}
+						}
+					],
+					"response": []
+				},
+				{
+					"name": "Get CSRF Token",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/csrf",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"csrf"
+							]
+						},
+						"description": "**GET /api/auth/csrf** — NextAuth: returns a CSRF token required by sign-in / sign-out POSTs.\n\n**Response `200`:** `{ \"csrfToken\": \"...\" }`"
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test(\"Status is 200\", () => pm.expect(pm.response.code).to.eql(200));",
+									"const json = pm.response.json();",
+									"if (json.csrfToken) {",
+									"  pm.collectionVariables.set(\"csrfToken\", json.csrfToken);",
+									"  console.log(\"Saved csrfToken:\", json.csrfToken);",
+									"}"
+								]
+							}
+						}
+					],
+					"response": []
+				},
+				{
+					"name": "Sign In (Credentials)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/x-www-form-urlencoded"
+							}
+						],
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{
+									"key": "csrfToken",
+									"value": "{{csrfToken}}",
+									"type": "text"
+								},
+								{
+									"key": "email",
+									"value": "{{admin_email}}",
+									"type": "text",
+									"description": "Use {{admin_email}} for admin routes or {{researcher_email}} for researcher routes"
+								},
+								{
+									"key": "password",
+									"value": "{{admin_password}}",
+									"type": "text",
+									"description": "Use {{admin_password}} or {{researcher_password}}"
+								},
+								{
+									"key": "json",
+									"value": "true",
+									"type": "text",
+									"description": "Required by NextAuth to get a JSON response instead of a redirect"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/callback/credentials",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"callback",
+								"credentials"
+							]
+						},
+						"description": "**POST /api/auth/callback/credentials** — NextAuth sign-in with the credentials provider.\n\n**Behavior:** Verifies email + bcrypt password against the `User` table, then issues a JWT session cookie (`next-auth.session-token`). The JWT embeds `id` and `role`, exposed on the session as `session.user.id` / `session.user.role`.\n\n**Important:** Run **Get CSRF Token** first so `{{csrfToken}}` is populated and Postman stores the CSRF cookie.\n\n**Responses:**\n- `200` → session established (success URL `/dashboard`)\n- `401` → invalid credentials\n- `302` → redirect (if `json: true` omitted)"
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test(\"Sign-in succeeded (200/302)\", () => pm.expect([200, 302]).to.include(pm.response.code));",
+									"pm.collectionVariables.set(\"signedInAs\", pm.collectionVariables.get(\"admin_email\"));",
+									"console.log(\"Signed in as:\", pm.collectionVariables.get(\"signedInAs\"));"
+								]
+							}
+						}
+					],
+					"response": []
+				},
+				{
+					"name": "Get Session",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/session",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"session"
+							]
+						},
+						"description": "**GET /api/auth/session** — Returns the current NextAuth session.\n\n**Response `200` (authenticated):**\n```json\n{\n  \"user\": { \"name\": \"...\", \"email\": \"...\", \"id\": \"cuid\", \"role\": \"ADMIN\" },\n  \"expires\": \"...\"\n}\n```\n\n**Response `200` (anonymous):** `{}` — empty object.\n\nHandy for verifying which account the stored cookie belongs to."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const json = pm.response.json();",
+									"if (json.user && json.user.id) {",
+									"  pm.collectionVariables.set(\"userId\", json.user.id);",
+									"  console.log(\"Session user:\", json.user.email, \"| role:\", json.user.role);",
+									"} else {",
+									"  console.log(\"No active session — sign in first.\");",
+									"}"
+								]
+							}
+						}
+					],
+					"response": []
+				},
+				{
+					"name": "Get Auth Providers",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/providers",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"providers"
+							]
+						},
+						"description": "**GET /api/auth/providers** — Lists configured NextAuth providers.\n\n**Response `200`:** `{ \"credentials\": { \"id\": \"credentials\", \"name\": \"credentials\", \"type\": \"credentials\", \"signinUrl\": \".../api/auth/signin/credentials\", \"callbackUrl\": \"...\" } }`"
+					},
+					"response": []
+				},
+				{
+					"name": "Sign Out",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/x-www-form-urlencoded"
+							}
+						],
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{
+									"key": "csrfToken",
+									"value": "{{csrfToken}}",
+									"type": "text"
+								},
+								{
+									"key": "json",
+									"value": "true",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/signout",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"signout"
+							]
+						},
+						"description": "**POST /api/auth/signout** — Clears the JWT session cookie.\n\nRun **Get CSRF Token** again afterwards if you plan to sign in as another account."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Summarization",
+			"description": "Core AI endpoints: summarize a paper by PMID or raw PDF text, and upload a PDF file (parsed via `pdf2json`, then forwarded internally to `/api/summarize`).\n\nWorkflow: Redis cache check → PubMed fetch (if PMID) → Gemini `gemini-2.5-flash` with feedback-aware system prompt → persist `Paper` + `Summary` → cache result (24h).",
+			"item": [
+				{
+					"name": "Summarize Paper (PMID or PDF text)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"pmid\": \"{{pmid}}\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/summarize",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"summarize"
+							]
+						},
+						"description": "**POST /api/summarize** — Generate an AI summary for a research paper.\n\n**Body (either one is required):**\n- `pmid` (string) — numeric PubMed ID. Metadata (title/abstract/authors) fetched from NCBI E-UTILS; result cached in Redis for 24h.\n- `pdfText` (string) — raw paper text, **min 100 chars**. First 30,000 chars are sent to Gemini.\n\n**Validation (zod):** `pmid` must match `/^\\d+$/`; request fails with `400` if neither field is present.\n\n**Behavior:**\n- Injects recent critical feedback (rating ≤ 3 with comments) into the Gemini system prompt — the feedback loop improves future summaries.\n- Auto-retries on Gemini `429` (up to 3 retries, waits up to 65s — expect slow responses when rate-limited).\n- Persists `Paper` (upsert by `pubmedId`, or `pdf-{timestamp}` for PDFs) and a `Summary` with status `COMPLETED`, model `gemini-2.5-flash`.\n- Without a session, the summary is attributed to the first `RESEARCHER` user.\n\n**Response `200` (example):**\n```json\n{\n  \"keyFindings\": \"...\",\n  \"methodology\": \"...\",\n  \"conclusions\": \"...\",\n  \"limitations\": \"...\",\n  \"paperTitle\": \"...\",\n  \"year\": \"2024\",\n  \"processingTimeMs\": 8123,\n  \"id\": \"cuid-of-summary\"\n}\n```\n\n**Errors:** `400` invalid JSON / validation · `404` `{ error: \"Abstract not found for this PMID.\" }` · `502` PubMed or Gemini/JSON-parse failure · `500` unexpected."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test(\"Status is 200\", () => pm.expect(pm.response.code).to.eql(200));",
+									"const json = pm.response.json();",
+									"if (json.id) {",
+									"  pm.collectionVariables.set(\"summaryId\", json.id);",
+									"  console.log(\"Saved summaryId:\", json.id);",
+									"}"
+								]
+							}
+						}
+					],
+					"response": []
+				},
+				{
+					"name": "Summarize Uploaded PDF",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "file",
+									"type": "file",
+									"src": [],
+									"description": "A research paper PDF (validated by extension `.pdf` or MIME type `application/pdf`)"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/parse-pdf",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"parse-pdf"
+							]
+						},
+						"description": "**POST /api/parse-pdf** — multipart/form-data upload of a PDF.\n\n**Pipeline:**\n1. Validates the file is a PDF (`400` otherwise).\n2. Extracts text with `pdf2json` (`422` if empty / scanned image-only / < 100 chars).\n3. Forwards `{ pdfText }` internally to `/api/summarize`, passing along your session cookie.\n\n**Response `200`** = summarize response **plus** `pdfFileName` and `extractedTextLength`.\n\n**Errors:** `400` no file / wrong type · `422` unreadable or too-short text · `4xx/5xx` mirrored from the summarize call."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test(\"Status is 200\", () => pm.expect(pm.response.code).to.eql(200));",
+									"const json = pm.response.json();",
+									"if (json.id) {",
+									"  pm.collectionVariables.set(\"summaryId\", json.id);",
+									"}",
+									"console.log(\"PDF:\", json.pdfFileName, \"| extracted chars:\", json.extractedTextLength);"
+								]
+							}
+						}
+					],
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Summaries",
+			"description": "Read and delete summaries. Ownership rule: users see only their own summaries unless `role === ADMIN`.",
+			"item": [
+				{
+					"name": "List Summaries",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/summaries?page=1&limit=10&search=&maxRating=",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"summaries"
+							],
+							"query": [
+								{
+									"key": "page",
+									"value": "1",
+									"description": "Page number (default 1)"
+								},
+								{
+									"key": "limit",
+									"value": "10",
+									"description": "Items per page (default 10)"
+								},
+								{
+									"key": "userId",
+									"value": "",
+									"description": "Optional — target user. Defaults to session user; ADMIN only can query other users",
+									"disabled": true
+								},
+								{
+									"key": "search",
+									"value": "",
+									"description": "Case-insensitive search on paper title or PubMed ID",
+									"disabled": true
+								},
+								{
+									"key": "maxRating",
+									"value": "",
+									"description": "Only summaries having a feedback with overallRating <= value (low-quality filter)",
+									"disabled": true
+								}
+							]
+						},
+						"description": "**GET /api/summaries** — Paginated list of the session user's summaries (ADMIN may pass `userId` to view others).\n\n**Response `200` (example):**\n```json\n{\n  \"summaries\": [\n    {\n      \"id\": \"cuid\",\n      \"paperTitle\": \"...\",\n      \"pmid\": \"32289690\",\n      \"year\": \"2024\",\n      \"dateAdded\": \"Sep 24, 2026\",\n      \"rating\": 4,\n      \"keyFindings\": \"...\",\n      \"methodology\": \"...\",\n      \"conclusions\": \"...\",\n      \"limitations\": \"...\",\n      \"isPdf\": false\n    }\n  ],\n  \"pagination\": { \"total\": 1, \"page\": 1, \"limit\": 10, \"totalPages\": 1 }\n}\n```\n\n**Errors:** `401` Unauthorized (no session) · `403` Forbidden (querying another user as non-ADMIN) · `500`."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test(\"Status is 200\", () => pm.expect(pm.response.code).to.eql(200));",
+									"const json = pm.response.json();",
+									"if (json.summaries && json.summaries.length > 0) {",
+									"  pm.collectionVariables.set(\"summaryId\", json.summaries[0].id);",
+									"  console.log(\"Saved first summaryId:\", json.summaries[0].id);",
+									"} else {",
+									"  console.log(\"No summaries yet — run POST /api/summarize first.\");",
+									"}"
+								]
+							}
+						}
+					],
+					"response": []
+				},
+				{
+					"name": "Get Summary by ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/summary/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"summary",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "{{summaryId}}",
+									"description": "Summary cuid (auto-captured from /api/summarize or /api/summaries)"
+								}
+							]
+						},
+						"description": "**GET /api/summary/{id}** — Full detail of one summary, including paper record and averaged feedback rating.\n\n**Response `200` (example):**\n```json\n{\n  \"id\": \"cuid\",\n  \"paperTitle\": \"...\",\n  \"pmid\": \"32289690\",\n  \"year\": \"2024\",\n  \"dateAdded\": \"Sep 24, 2026\",\n  \"rating\": 4,\n  \"keyFindings\": \"...\",\n  \"methodology\": \"...\",\n  \"conclusions\": \"...\",\n  \"limitations\": \"...\",\n  \"isPdf\": false\n}\n```\n\n**Errors:** `401` Unauthorized · `403` Forbidden (not owner, not ADMIN) · `404` Summary not found · `500`."
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Summary",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/summary/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"summary",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "{{summaryId}}",
+									"description": "Summary cuid — deleting cascades its Feedback rows (Prisma onDelete: Cascade)"
+								}
+							]
+						},
+						"description": "**DELETE /api/summary/{id}** — Owner or ADMIN only.\n\n**Response `200`:** `{ \"message\": \"Summary deleted successfully\" }`\n\n**Errors:** `401` · `403` · `404` · `500`."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Feedback",
+			"description": "User feedback on summaries. Feeding low ratings (≤ 3) with comments back into `/api/summarize` is the app's continuous-improvement loop.",
+			"item": [
+				{
+					"name": "List My Feedback",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/feedback?userId=",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"feedback"
+							],
+							"query": [
+								{
+									"key": "userId",
+									"value": "",
+									"description": "Optional — defaults to session user; ADMIN can query other users",
+									"disabled": true
+								}
+							]
+						},
+						"description": "**GET /api/feedback** — Feedback entries of the session user (newest first), each including its summary and paper.\n\n**Response `200` (example):**\n```json\n{\n  \"feedbacks\": [\n    { \"id\": \"cuid\", \"type\": \"summary\", \"message\": \"Good extraction\", \"date\": \"Sep 24, 2026\" }\n  ]\n}\n```\n\n`type` is inferred: comments saved as `[type] message` are parsed back (e.g. `[bug] App crashed` → type `bug`); feedback linked to a summary without a bracket tag gets type `summary`; otherwise `general`.\n\n**Errors:** `401` · `403` · `500`."
+					},
+					"response": []
+				},
+				{
+					"name": "Submit Feedback",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"type\": \"summary\",\n  \"rating\": 4,\n  \"message\": \"Key findings were accurate but methodology lacked detail.\",\n  \"summaryId\": \"{{summaryId}}\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/feedback",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"feedback"
+							]
+						},
+						"description": "**POST /api/feedback** — Submit feedback.\n\n**Body:**\n- `type` (required) — free-form tag, e.g. `summary`, `bug`, `general` (stored as `[type] message` in the comment).\n- `message` (required) — feedback text.\n- `rating` (optional, 1–5) — defaults to 5; applied to `overallRating`, `accuracyRating` and `coherenceRating`.\n- `summaryId` (optional) — if omitted, the feedback is attached to the user's latest summary.\n\n**Response `201`:** `{ \"message\": \"Feedback submitted successfully\", \"id\": \"cuid\" }`\n\n**Errors:** `401` · `400` missing fields · `500` (also fails if the user has no summaries and `summaryId` is required by the DB)."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "API Keys",
+			"description": "Personal API key management for the session user. Keys are generated as `papero_{64-hex}`. Tier limits: `BASIC` 1000 · `RESEARCHER` 10000 · `ADMIN` 50000.",
+			"item": [
+				{
+					"name": "List My API Keys",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/keys?userId=",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"keys"
+							],
+							"query": [
+								{
+									"key": "userId",
+									"value": "",
+									"description": "Optional — defaults to session user; ADMIN can view other users' keys",
+									"disabled": true
+								}
+							]
+						},
+						"description": "**GET /api/keys** — API keys owned by the session user (newest first).\n\n**Response `200` (example):**\n```json\n{\n  \"keys\": [\n    {\n      \"id\": \"cuid\",\n      \"name\": \"My Mac Key\",\n      \"maskedKey\": \"papero••••••••ab12\",\n      \"key\": \"papero_...(full key)\",\n      \"tier\": \"BASIC\",\n      \"created\": \"Sep 24, 2026\",\n      \"usage\": 12,\n      \"limit\": 1000\n    }\n  ]\n}\n```\n\n**Errors:** `401` · `403` · `500`."
+					},
+					"response": []
+				},
+				{
+					"name": "Create API Key",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"My Research Key\",\n  \"role\": \"BASIC\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/keys",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"keys"
+							]
+						},
+						"description": "**POST /api/keys** — Create a new API key for the session user.\n\n**Body:**\n- `name` (required) — display name.\n- `role` (optional) — maps to tier & monthly limit: `BASIC` (default, 1000), `RESEARCHER` (10000), `ADMIN` (50000).\n\n**Response `201` (example):**\n```json\n{\n  \"message\": \"API Key created\",\n  \"key\": \"papero_9f2c...(raw key — shown once here but also stored retrievable via GET)\",\n  \"apiKey\": { \"id\": \"cuid\", \"name\": \"...\", \"maskedKey\": \"...\", \"tier\": \"BASIC\", \"created\": \"Sep 24, 2026\", \"usage\": 0, \"limit\": 1000 }\n}\n```\n\n**Errors:** `401` · `400` missing name · `500`."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test(\"Status is 201 Created\", () => pm.expect(pm.response.code).to.eql(201));",
+									"const json = pm.response.json();",
+									"if (json.apiKey && json.apiKey.id) {",
+									"  pm.collectionVariables.set(\"apiKeyId\", json.apiKey.id);",
+									"  console.log(\"Saved apiKeyId:\", json.apiKey.id);",
+									"}"
+								]
+							}
+						}
+					],
+					"response": []
+				},
+				{
+					"name": "Revoke (Delete) API Key",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/keys/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"keys",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "{{apiKeyId}}",
+									"description": "ApiKey cuid (auto-captured when creating a key)"
+								}
+							]
+						},
+						"description": "**DELETE /api/keys/{id}** — Permanently deletes the key. Owner or ADMIN only.\n\n**Response `200`:** `{ \"message\": \"API Key revoked successfully\" }`\n\n**Errors:** `401` · `403` · `404` API Key not found · `500`.\n\n💡 For a soft revoke (`isActive: false`) as ADMIN, see **Admin → Revoke Any Key**."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "User",
+			"description": "Profile self-service endpoints. `PATCH`/`DELETE` allow self or ADMIN; the password change endpoint allows **self only**.",
+			"item": [
+				{
+					"name": "Update Profile",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Jane D. Doe\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/user/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"user",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "{{userId}}",
+									"description": "User cuid — defaults to the session user via auto-captured variable"
+								}
+							]
+						},
+						"description": "**PATCH /api/user/{id}** — Update profile (self or ADMIN only).\n\n**Body:** `name` is the only field persisted by the current schema (`jobTitle` / `organization` are accepted but not stored).\n\n**Response `200`:** `{ \"message\": \"Profile updated successfully\", \"user\": { \"id\": \"cuid\", \"name\": \"...\" } }`\n\n**Errors:** `401` · `403` (not self/ADMIN) · `404` unknown id · `500`."
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Account",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/user/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"user",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "{{userId}}",
+									"description": "User cuid — deleting cascades ApiKey rows; Summary/Feedback rows reference the user"
+								}
+							]
+						},
+						"description": "**DELETE /api/user/{id}** — Permanently deletes the account (self or ADMIN only).\n\n**Response `200`:** `{ \"message\": \"Account deleted successfully\" }`\n\n**Errors:** `401` · `403` · `404` · `500` (FK conflicts if the user still owns summaries/feedback).\n\n⚠️ Destructive — the seeded researcher accounts are used by the analytics dashboards."
+					},
+					"response": []
+				},
+				{
+					"name": "Change Password",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"currentPassword\": \"admin123\",\n  \"newPassword\": \"newSecurePass456\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/user/:id/password",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"user",
+								":id",
+								"password"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "{{userId}}",
+									"description": "Must be the session user's own id — even ADMINs cannot change other users' passwords here"
+								}
+							]
+						},
+						"description": "**PATCH /api/user/{id}/password** — Change your own password (self only, verified against the session).\n\n**Body:**\n- `currentPassword` (required) — checked with bcrypt.\n- `newPassword` (required) — hashed with bcrypt (10 rounds).\n\n**Response `200`:** `{ \"message\": \"Password updated successfully\" }`\n\n**Errors:** `401` · `403` (id ≠ session user) · `400` missing fields or incorrect current password · `404` user not found · `500`."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Dashboard",
+			"description": "Aggregated stats for the logged-in user's dashboard.",
+			"item": [
+				{
+					"name": "Get My Dashboard Stats",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/dashboard/stats",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"dashboard",
+								"stats"
+							]
+						},
+						"description": "**GET /api/dashboard/stats** — Session user's KPIs and 5 most recent summaries.\n\n**Response `200` (example):**\n```json\n{\n  \"stats\": {\n    \"papersSummarized\": 12,\n    \"apiCallsToday\": 1540,\n    \"feedbackGiven\": 5\n  },\n  \"recentSummaries\": [\n    { \"id\": \"cuid\", \"title\": \"...\", \"pmid\": \"32289690\", \"date\": \"Sep 24\", \"status\": \"completed\" }\n  ]\n}\n```\n\nNote: `apiCallsToday` currently returns the user's total `apiCallsCount` (no daily breakdown tracked yet).\n\n**Errors:** `401` Unauthorized (no session email) · `404` user not found · `500`."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Admin",
+			"description": "ADMIN-only management & analytics endpoints (role check: `session.user.role === 'ADMIN'`; otherwise `403`). Sign in with `admin@distill.com` / `admin123`.\n\n⚠️ Some analytics contain demo/mock values (`dailyUsage` scaling, `weeklyUsagePerKey` random calls, static `trends`).",
+			"item": [
+				{
+					"name": "List Users",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/admin/users?page=1&limit=10",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"admin",
+								"users"
+							],
+							"query": [
+								{
+									"key": "page",
+									"value": "1",
+									"description": "Page number (default 1)"
+								},
+								{
+									"key": "limit",
+									"value": "10",
+									"description": "Items per page (default 10)"
+								}
+							]
+						},
+						"description": "**GET /api/admin/users** — Paginated user directory, newest first, with summary counts.\n\n**Response `200` (example):**\n```json\n{\n  \"users\": [\n    { \"id\": \"cuid\", \"name\": \"Admin Sharma\", \"email\": \"admin@distill.com\", \"role\": \"ADMIN\", \"isActive\": true, \"summaries\": 3, \"joined\": \"Sep 24, 2026\" }\n  ],\n  \"pagination\": { \"total\": 16, \"page\": 1, \"limit\": 10, \"totalPages\": 2 }\n}\n```\n\n**Errors:** `403` Unauthorized (non-ADMIN) · `500`."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.test(\"Status is 200\", () => pm.expect(pm.response.code).to.eql(200));",
+									"const json = pm.response.json();",
+									"if (json.users && json.users.length > 0) {",
+									"  pm.collectionVariables.set(\"userId\", json.users[0].id);",
+									"  console.log(\"Saved first userId:\", json.users[0].id);",
+									"}"
+								]
+							}
+						}
+					],
+					"response": []
+				},
+				{
+					"name": "Update User Role",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"role\": \"VIEWER\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/admin/users/:id",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"admin",
+								"users",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "{{userId}}",
+									"description": "Target user cuid (auto-captured from List Users / Register)"
+								}
+							]
+						},
+						"description": "**PATCH /api/admin/users/{id}** — Change a user's role (ADMIN only).\n\n**Body:** `role` (required) — one of `ADMIN`, `RESEARCHER`, `VIEWER` (validated).\n\n**Response `200`:** `{ \"message\": \"Role updated\", \"user\": { \"id\": \"cuid\", \"role\": \"VIEWER\" } }`\n\n**Errors:** `403` · `400` missing/invalid role · `404` unknown id (Prisma) · `500`."
+					},
+					"response": []
+				},
+				{
+					"name": "List All API Keys",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/admin/keys",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"admin",
+								"keys"
+							]
+						},
+						"description": "**GET /api/admin/keys** — Every API key in the system with owner names (ADMIN only).\n\n**Response `200` (example):**\n```json\n{\n  \"keys\": [\n    { \"id\": \"cuid\", \"name\": \"Kumar's Mac Key\", \"owner\": \"Dr. Rajesh Kumar\", \"tier\": \"BASIC\", \"created\": \"Sep 1, 2026\", \"usage\": 42, \"limit\": 1000, \"status\": \"Active\", \"key\": \"distill_sk_live_...\" }\n  ],\n  \"weeklyUsagePerKey\": [ { \"name\": \"Kumar's Mac Key\", \"calls\": 1234, \"tier\": \"BASIC\" } ]\n}\n```\n\nNote: `weeklyUsagePerKey.calls` is randomized mock data (no per-day usage history in schema).\n\n**Errors:** `403` · `500`."
+					},
+					"response": []
+				},
+				{
+					"name": "Revoke Any Key",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"id\": \"{{apiKeyId}}\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/admin/keys",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"admin",
+								"keys"
+							]
+						},
+						"description": "**POST /api/admin/keys** — Soft-revoke any key (ADMIN only): sets `isActive: false`.\n\n**Body:** `id` (required) — the ApiKey cuid.\n\n**Response `200`:** `{ \"message\": \"Key revoked successfully\" }`\n\n**Errors:** `403` · `400` missing id · `500`.\n\n💡 This flips status to `\"Revoked\"` in Admin → List All API Keys. Hard delete lives at `DELETE /api/keys/{id}`."
+					},
+					"response": []
+				},
+				{
+					"name": "List All Summaries",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/admin/summaries?search=&filter=PDF&sort=Newest",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"admin",
+								"summaries"
+							],
+							"query": [
+								{
+									"key": "search",
+									"value": "",
+									"description": "Filter by paper title or PubMed ID (case-insensitive contains)",
+									"disabled": true
+								},
+								{
+									"key": "filter",
+									"value": "PDF",
+									"description": "One of: PDF | PubMed | Highly Rated (rating >= 4) | Needs Review (0 < rating < 3)",
+									"disabled": false
+								},
+								{
+									"key": "sort",
+									"value": "Newest",
+									"description": "One of: Newest (default) | Oldest | Highest Rated | Lowest Rated",
+									"disabled": false
+								}
+							]
+						},
+						"description": "**GET /api/admin/summaries** — Every summary with owner, source and rating (ADMIN only).\n\n**Response `200` (example):**\n```json\n{\n  \"summaries\": [\n    { \"id\": \"cuid\", \"title\": \"...\", \"pmid\": \"32289690\", \"user\": \"Dr. Rajesh Kumar\", \"date\": \"2026-09-24T10:15:30.000Z\", \"rating\": 4.5, \"status\": \"Completed\", \"source\": \"PubMed\" }\n  ]\n}\n```\n\n- `status` maps from SummaryStatus: `COMPLETED → Completed`, `FAILED → Failed`, else `Processing`.\n- `source` maps from `sourceType`: `PUBMED → PubMed`, else `PDF`.\n\n**Errors:** `403` · `500`."
+					},
+					"response": []
+				},
+				{
+					"name": "Platform Stats",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/admin/stats",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"admin",
+								"stats"
+							]
+						},
+						"description": "**GET /api/admin/stats** — Admin home KPIs (ADMIN only).\n\n**Response `200` (example):**\n```json\n{\n  \"totalUsers\": 16,\n  \"totalSummaries\": 45,\n  \"avgRating\": \"4.2\",\n  \"callsToday\": 3,\n  \"activeKeys\": 8,\n  \"recentActivity\": [\n    { \"time\": \"5 mins ago\", \"text\": \"Dr. Rajesh Kumar summarized \\\"CRISPR-Cas9 Editing...\" }\n  ],\n  \"topResearcher\": { \"name\": \"Dr. Anjali Desai\", \"summaries\": 9 }\n}\n```\n\n`callsToday` counts summaries created since local midnight; `recentActivity` merges the 3 newest summaries and 2 newest feedbacks.\n\n**Errors:** `403` · `500`."
+					},
+					"response": []
+				},
+				{
+					"name": "Platform Analytics",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/admin/analytics",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"admin",
+								"analytics"
+							]
+						},
+						"description": "**GET /api/admin/analytics** — Charts data (ADMIN only).\n\n**Response `200` (example):**\n```json\n{\n  \"ratingDistribution\": [ { \"stars\": 5, \"count\": 12, \"pct\": 48 }, { \"stars\": 4, \"count\": 8, \"pct\": 32 }, { \"stars\": 3, \"count\": 3, \"pct\": 12 }, { \"stars\": 2, \"count\": 1, \"pct\": 4 }, { \"stars\": 1, \"count\": 1, \"pct\": 4 } ],\n  \"dailyUsage\": [ { \"day\": \"Sep 11\", \"calls\": 34 }, ... 14 days ],\n  \"recentFeedback\": [ { \"id\": \"cuid\", \"rating\": 5, \"comment\": \"Great summary...\", \"paper\": \"...\", \"date\": \"Sep 24\" } ],\n  \"trends\": { \"mostSummarized\": \"CRISPR-Cas9 Editing (mock)\", \"activeResearcher\": \"Dr. Jane Smith (142)\", \"peakHour\": \"2:00 PM - 3:00 PM EST\" }\n}\n```\n\nNotes: `dailyUsage` covers the last 14 days (call counts scaled ×5 for low usage, or mocked when zero); missing comments get a canned comment based on rating; `trends` is static mock data.\n\n**Errors:** `401` (non-ADMIN) · `500`."
+					},
+					"response": []
+				},
+				{
+					"name": "Feedback Analytics",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/admin/feedback/analytics",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"admin",
+								"feedback",
+								"analytics"
+							]
+						},
+						"description": "**GET /api/admin/feedback/analytics** — Feedback-focused charts (ADMIN only).\n\n**Response `200` (example):**\n```json\n{\n  \"ratingDistribution\": { \"1\": 0, \"2\": 1, \"3\": 2, \"4\": 6, \"5\": 14 },\n  \"recentFeedback\": [\n    { \"id\": \"cuid\", \"user\": \"Dr. Rajesh Kumar\", \"role\": \"RESEARCHER\", \"rating\": 5, \"comment\": \"[summary] Very accurate\", \"paperTarget\": \"CRISPR-Cas9 Editing...\", \"date\": \"Sep 24\" }\n  ],\n  \"dailyAvg\": [ { \"label\": \"Thu\", \"avg\": 4.3 }, ... 7 days ]\n}\n```\n\n`dailyAvg` is the mean `overallRating` per day over the last 7 days (`0` when no feedback that day).\n\n**Errors:** `403` · `500`."
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:3001",
+			"description": "Dev server — `npm run dev` binds port 3001. Change for staging/production."
+		},
+		{
+			"key": "pmid",
+			"value": "32289690",
+			"description": "Sample PubMed ID used by POST /api/summarize"
+		},
+		{
+			"key": "csrfToken",
+			"value": "",
+			"description": "Auto-captured from GET /api/auth/csrf"
+		},
+		{
+			"key": "admin_email",
+			"value": "admin@distill.com",
+			"description": "Seeded ADMIN account (password: admin123)"
+		},
+		{
+			"key": "admin_password",
+			"value": "admin123",
+			"description": "Seeded ADMIN password"
+		},
+		{
+			"key": "researcher_email",
+			"value": "drrajeshkumar@example.com",
+			"description": "Seeded RESEARCHER account (password: password123)"
+		},
+		{
+			"key": "researcher_password",
+			"value": "password123",
+			"description": "Seeded RESEARCHER password"
+		},
+		{
+			"key": "userId",
+			"value": "",
+			"description": "Auto-captured from Register / Get Session / Admin List Users"
+		},
+		{
+			"key": "summaryId",
+			"value": "",
+			"description": "Auto-captured from POST /api/summarize, POST /api/parse-pdf or GET /api/summaries"
+		},
+		{
+			"key": "apiKeyId",
+			"value": "",
+			"description": "Auto-captured from POST /api/keys"
+		},
+		{
+			"key": "signedInAs",
+			"value": "",
+			"description": "Email of the account used in the last sign-in (informational)"
+		}
+	]
+}
