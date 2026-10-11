@@ -5,6 +5,11 @@ import prisma from "@/lib/prisma";
 import redis from "@/lib/redis";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../auth/[...nextauth]/route";
+import {
+  extractAuthors,
+  extractTag,
+  stripMarkdownFences,
+} from "@/lib/summarize-utils";
 
 // ── Zod Schema ──
 const SummarizeInput = z
@@ -38,31 +43,6 @@ object with exactly these keys — no markdown, no extra text, just JSON:
   "paperTitle": "string",
   "year": "string"
 }`;
-
-// ── Helpers ──
-function extractTag(xml: string, tag: string): string {
-  const regex = new RegExp(`<${tag}[^>]*>(.*?)<\\/${tag}>`, "is");
-  const match = xml.match(regex);
-  return match ? match[1].replace(/<[^>]+>/g, "").trim() : "";
-}
-
-function extractAuthors(xml: string): string[] {
-  const authorBlocks = xml.match(/<Author[^>]*>.*?<\/Author>/gis) || [];
-  return authorBlocks
-    .map((block) => {
-      const last = extractTag(block, "LastName");
-      const first = extractTag(block, "ForeName");
-      return `${first} ${last}`.trim();
-    })
-    .filter(Boolean);
-}
-
-function stripMarkdownFences(text: string): string {
-  return text
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/i, "")
-    .trim();
-}
 
 // ── Gemini call with auto-retry on 429 ──
 async function callGeminiWithRetry(
