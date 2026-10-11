@@ -40,8 +40,6 @@ export default function AdminSummariesPage() {
   }, []);
 
   useEffect(() => {
-    let debounceTimer: NodeJS.Timeout;
-    
     const fetchSummaries = async () => {
       setLoading(true);
       try {
@@ -63,7 +61,7 @@ export default function AdminSummariesPage() {
     };
 
     // Debounce search slightly
-    debounceTimer = setTimeout(() => {
+    const debounceTimer: NodeJS.Timeout = setTimeout(() => {
       fetchSummaries();
     }, 300);
 
